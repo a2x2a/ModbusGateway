@@ -1,0 +1,23 @@
+# Результаты сборки
+Win32/
+Win64/
+*.exe
+*.dll
+*.dcu
+*.res
+*.map
+*.rsm
+*.identcache
+*.otares
+*.dproj.local
+*.dsk
+*.dsv
+__history/
+
+# Настройки приложения (создаются при запуске рядом с exe)
+ModbusGateway.ini
+
+# Разное
+*.~*
+*.local
+Thumbs.db

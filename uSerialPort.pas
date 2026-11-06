@@ -25,6 +25,8 @@ type
     function Read(var ABuf; AMax: DWORD): DWORD;
     procedure Write(const ABuf; ALen: DWORD);
     procedure Purge;
+    // Сколько байт уже лежит во входном буфере порта
+    function InputCount: DWORD;
   end;
 
 implementation
@@ -155,6 +157,18 @@ procedure TSerialPort.Purge;
 begin
   if FHandle <> INVALID_HANDLE_VALUE then
     PurgeComm(FHandle, PURGE_RXCLEAR or PURGE_TXCLEAR);
+end;
+
+function TSerialPort.InputCount: DWORD;
+var
+  Errors: DWORD;
+  Stat: TComStat;
+begin
+  if FHandle = INVALID_HANDLE_VALUE then
+    Exit(0);
+  if not ClearCommError(FHandle, Errors, @Stat) then
+    RaiseLastOSError;
+  Result := Stat.cbInQue;
 end;
 
 end.

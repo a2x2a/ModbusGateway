@@ -16,6 +16,8 @@ type
     Host: string;              // IP/имя устройства Modbus TCP
     TcpPort: Word;             // обычно 502
     ResponseTimeoutMs: Integer;
+    CacheEnabled: Boolean;     // кэш значений для f03/f04
+    CacheTtlMs: Integer;       // время жизни записи кэша, мс
   end;
 
   TGatewayState = (gsRunning, gsStopped, gsError);
@@ -23,6 +25,25 @@ type
   TLogEvent = procedure(ASender: TObject; const AText: string) of object;
   TStateEvent = procedure(ASender: TObject; AState: TGatewayState;
     const AMessage: string) of object;
+
+  // Запись кэша значений регистров (ключ — unit/функция/адрес/количество)
+  TCacheEntry = record
+    UnitId: Byte;
+    Func: Byte;
+    Addr: Word;
+    Qty: Word;
+    Data: TBytes;   // данные ответа (после байта количества)
+    Stamp: UInt64;  // GetTickCount64
+  end;
+
+  // Отложенный TCP-запрос на обновление кэша
+  TRefreshItem = record
+    UnitId: Byte;
+    Func: Byte;
+    Addr: Word;
+    Qty: Word;
+    Pdu: TBytes;
+  end;
 
   // Рабочий поток шлюза: слушает RTU-запросы мастера на COM-порту,
   // переадресует их устройству по Modbus TCP и возвращает ответ по RTU.
@@ -37,6 +58,10 @@ type
     FRequests: Integer;
     FResponses: Integer;
     FErrors: Integer;
+    FCache: array of TCacheEntry;
+    FCacheHits: Integer;
+    FRefreshQueue: array of TRefreshItem;
+    FRxBuf: TBytes; // накопитель принятых байт (кадры могут идти вплотную)
     function IsTerminated: Boolean;
     procedure Log(const AText: string);
     procedure LogFmt(const AFmt: string; const AArgs: array of const);
@@ -48,6 +73,13 @@ type
       out ARespPdu: TBytes; out AErrCode: Byte): Boolean;
     procedure SendRtuException(AUnit, AFunc, AErrCode: Byte);
     procedure EnsureTcpConnected;
+    function CacheLookup(AUnit, AFunc: Byte; AAddr, AQty: Word;
+      out AData: TBytes; out AAgeMs: Integer): Boolean;
+    procedure CacheStore(AUnit, AFunc: Byte; AAddr, AQty: Word;
+      const AData: TBytes);
+    procedure EnqueueRefresh(AUnit, AFunc: Byte; AAddr, AQty: Word;
+      const APdu: TBytes);
+    procedure ProcessRefreshQueue;
   protected
     procedure Execute; override;
   public
@@ -59,6 +91,7 @@ type
     property Requests: Integer read FRequests;
     property Responses: Integer read FResponses;
     property Errors: Integer read FErrors;
+    property CacheHits: Integer read FCacheHits;
   end;
 
 implementation
@@ -69,6 +102,8 @@ uses
 const
   MAX_RTU_ADU = 256; // максимальный кадр Modbus RTU
   TCP_RECONNECT_DELAY_MS = 3000;
+  MAX_CACHE_ENTRIES = 32; // максимум записей кэша значений регистров
+  MAX_REFRESH_QUEUE = 64; // максимум отложенных TCP-запросов на обновление
 
 constructor TGatewayThread.Create(const AConfig: TGatewayConfig);
 begin
@@ -156,6 +191,8 @@ begin
       EnsureTcpConnected;
       if Terminated then
         Break;
+      // Фоновое обновление кэша — только когда линия RTU свободна
+      ProcessRefreshQueue;
       if ReadRtuFrame(Frame) then
       begin
         Inc(FRequests);
@@ -204,44 +241,86 @@ begin
   end;
 end;
 
-// Накопление кадра до межкадровой паузы (тайм-аут между байтами)
+// Ожидаемая длина кадра запроса RTU (вместе с адресом и CRC) по коду функции.
+// >0 — длина известна; 0 — данных пока мало; -1 — функция неизвестна.
+function ExpectedReqLen(const ABuf: TBytes): Integer;
+begin
+  if Length(ABuf) < 2 then
+    Exit(0);
+  case ABuf[1] of
+    $01..$06: Result := 8;
+    $0F, $10:
+      begin
+        if Length(ABuf) < 7 then
+          Exit(0);
+        Result := 9 + ABuf[6]; // байт количества данных + сами данные
+      end;
+    $16: Result := 10;
+    $17:
+      begin
+        if Length(ABuf) < 11 then
+          Exit(0);
+        Result := 13 + ABuf[10];
+      end;
+  else
+    Result := -1;
+  end;
+end;
+
+// Накопление кадра: байты копятся в FRxBuf, кадр отрезается по ожидаемой
+// длине из заголовка запроса (мастер может слать кадры вплотную, без паузы
+// 3,5 символа). Межкадровая пауза (тайм-аут чтения) используется только
+// как запасной признак для неизвестных функций и обрывков.
 function TGatewayThread.ReadRtuFrame(out AFrame: TBytes): Boolean;
 var
-  Buf: array[0..MAX_RTU_ADU + 3] of Byte;
-  N, Total: DWORD;
+  Buf: array[0..MAX_RTU_ADU] of Byte;
+  N: DWORD;
+  ExpLen, OldLen: Integer;
 begin
   Result := False;
-  Total := 0;
   while not Terminated do
   begin
-    N := FSerial.Read(Buf[Total], DWORD(Length(Buf)) - Total);
+    N := FSerial.Read(Buf[0], DWORD(Length(Buf)));
     if N > 0 then
     begin
-      Inc(Total, N);
-      if Total >= DWORD(Length(Buf)) then
+      OldLen := Length(FRxBuf);
+      SetLength(FRxBuf, OldLen + Integer(N));
+      Move(Buf[0], FRxBuf[OldLen], N);
+      if Length(FRxBuf) > 2 * MAX_RTU_ADU then
       begin
-        Log('ОШИБКА: RX: кадр длиннее допустимого, буфер очищен');
+        Log('ОШИБКА: RX: входной буфер переполнен, очищен');
+        SetLength(FRxBuf, 0);
         FSerial.Purge;
         Inc(FErrors);
-        Exit;
       end;
-    end
-    else if Total > 0 then
+    end;
+    // Пытаемся отрезать полный кадр по ожидаемой длине
+    ExpLen := ExpectedReqLen(FRxBuf);
+    if (ExpLen > 0) and (Length(FRxBuf) >= ExpLen) then
     begin
-      // Пауза на линии — кадр завершён
-      SetLength(AFrame, Total);
-      Move(Buf[0], AFrame[0], Total);
+      SetLength(AFrame, ExpLen);
+      Move(FRxBuf[0], AFrame[0], ExpLen);
+      if Length(FRxBuf) > ExpLen then
+        Move(FRxBuf[ExpLen], FRxBuf[0], Length(FRxBuf) - ExpLen);
+      SetLength(FRxBuf, Length(FRxBuf) - ExpLen);
       Exit(True);
     end;
-    // Total = 0 и тайм-аут: просто новая итерация (проверка Terminated)
+    // Пауза на линии, а полного кадра нет: обрывок или неизвестная функция —
+    // отдаём накопленное как есть (дальше его отбракует проверка CRC)
+    if (N = 0) and (Length(FRxBuf) > 0) then
+    begin
+      AFrame := FRxBuf;
+      SetLength(FRxBuf, 0);
+      Exit(True);
+    end;
   end;
 end;
 
 procedure TGatewayThread.ProcessFrame(const AFrame: TBytes);
 var
   UnitId, FuncCode, ErrCode: Byte;
-  Pdu, RespPdu, Resp: TBytes;
-  PduLen: Integer;
+  Pdu, RespPdu, Resp, CacheData: TBytes;
+  PduLen, ReqAddr, ReqQty, CacheAge: Integer;
   Desc: string;
   Valid: Boolean;
 begin
@@ -250,7 +329,7 @@ begin
   PduLen := Length(AFrame) - 3; // без адреса и двух байт CRC
   SetLength(Pdu, PduLen);
   Move(AFrame[1], Pdu[0], PduLen);
-  // Одна строка на кадр: f03, адрес @100, количество n2, данные =[...].
+  // Одна строка на кадр: f03, адрес @100, количество n2, данные [...].
   // Дамп пакета показываем только если структура PDU не распознана.
   Desc := DescribePdu(Pdu, False, Valid);
   if not Valid then
@@ -258,6 +337,38 @@ begin
   if UnitId = 0 then
     Desc := Desc + ' (широковещ.)';
   Log('RX: ' + Desc);
+
+  // Кэш значений для читающих группу регистров функций (f03/f04).
+  // Есть свежая запись (в пределах TTL) — отвечаем мастеру сразу из кэша
+  // и ставим TCP-запрос на обновление в очередь (без дублей по ключу);
+  // очередь выполняется в паузах RTU-трафика (ProcessRefreshQueue).
+  // Свежей записи нет — идём в TCP синхронно, ответ пополнит кэш.
+  if FConfig.CacheEnabled and (UnitId <> 0) and
+     ((FuncCode = $03) or (FuncCode = $04)) and (PduLen = 5) then
+  begin
+    ReqAddr := (Pdu[1] shl 8) or Pdu[2];
+    ReqQty := (Pdu[3] shl 8) or Pdu[4];
+    if CacheLookup(UnitId, FuncCode, ReqAddr, ReqQty, CacheData, CacheAge) then
+    begin
+      Inc(FResponses);
+      Inc(FCacheHits);
+      SetLength(RespPdu, 2 + Length(CacheData));
+      RespPdu[0] := FuncCode;
+      RespPdu[1] := Byte(Length(CacheData));
+      Move(CacheData[0], RespPdu[2], Length(CacheData));
+      SetLength(Resp, Length(RespPdu) + 1);
+      Resp[0] := UnitId;
+      Move(RespPdu[0], Resp[1], Length(RespPdu));
+      AppendCrc(Resp);
+      FSerial.Write(Resp[0], Length(Resp));
+      Desc := DescribePdu(RespPdu, True, Valid);
+      if not Valid then
+        Desc := Desc + ' | ' + BytesToHex(Resp);
+      LogFmt('TX: %s (кэш %d мс)', [Desc, CacheAge]);
+      EnqueueRefresh(UnitId, FuncCode, ReqAddr, ReqQty, Pdu);
+      Exit;
+    end;
+  end;
 
   if not TcpExchange(Pdu, UnitId, RespPdu, ErrCode) then
   begin
@@ -272,6 +383,14 @@ begin
   if UnitId = 0 then
     Exit; // широковещательный запрос — ответ мастеру не требуется
 
+  // Успешный ответ на чтение — обновляем кэш
+  if FConfig.CacheEnabled and
+     ((FuncCode = $03) or (FuncCode = $04)) and (PduLen = 5) and
+     (Length(RespPdu) >= 2) and (RespPdu[0] = FuncCode) and
+     (RespPdu[1] = Length(RespPdu) - 2) then
+    CacheStore(UnitId, FuncCode, (Pdu[1] shl 8) or Pdu[2],
+      (Pdu[3] shl 8) or Pdu[4], Copy(RespPdu, 2, RespPdu[1]));
+
   // Ответ устройства -> кадр RTU для мастера
   SetLength(Resp, Length(RespPdu) + 1);
   Resp[0] := UnitId;
@@ -282,6 +401,133 @@ begin
   if not Valid then
     Desc := Desc + ' | ' + BytesToHex(Resp);
   Log('TX: ' + Desc);
+end;
+
+// Поиск свежей записи кэша (не старше TTL)
+function TGatewayThread.CacheLookup(AUnit, AFunc: Byte; AAddr, AQty: Word;
+  out AData: TBytes; out AAgeMs: Integer): Boolean;
+var
+  I: Integer;
+  Age: UInt64;
+begin
+  Result := False;
+  for I := 0 to High(FCache) do
+    if (FCache[I].UnitId = AUnit) and (FCache[I].Func = AFunc) and
+       (FCache[I].Addr = AAddr) and (FCache[I].Qty = AQty) then
+    begin
+      Age := GetTickCount64 - FCache[I].Stamp;
+      if Age <= UInt64(FConfig.CacheTtlMs) then
+      begin
+        AData := FCache[I].Data;
+        AAgeMs := Integer(Age);
+        Exit(True);
+      end;
+      Exit; // запись есть, но протухла — считается промахом
+    end;
+end;
+
+// Запись/обновление кэша; при переполнении вытесняется самая старая запись
+procedure TGatewayThread.CacheStore(AUnit, AFunc: Byte; AAddr, AQty: Word;
+  const AData: TBytes);
+var
+  I, Slot: Integer;
+begin
+  Slot := -1;
+  for I := 0 to High(FCache) do
+    if (FCache[I].UnitId = AUnit) and (FCache[I].Func = AFunc) and
+       (FCache[I].Addr = AAddr) and (FCache[I].Qty = AQty) then
+    begin
+      Slot := I;
+      Break;
+    end;
+  if Slot < 0 then // существующей записи нет
+  begin
+    if Length(FCache) < MAX_CACHE_ENTRIES then
+    begin
+      SetLength(FCache, Length(FCache) + 1);
+      Slot := High(FCache);
+    end
+    else
+    begin
+      Slot := 0;
+      for I := 1 to High(FCache) do
+        if FCache[I].Stamp < FCache[Slot].Stamp then
+          Slot := I;
+    end;
+  end;
+  FCache[Slot].UnitId := AUnit;
+  FCache[Slot].Func := AFunc;
+  FCache[Slot].Addr := AAddr;
+  FCache[Slot].Qty := AQty;
+  FCache[Slot].Data := AData;
+  FCache[Slot].Stamp := GetTickCount64;
+end;
+
+// Постановка TCP-запроса на обновление кэша в очередь.
+// Дубли по ключу (unit/функция/адрес/количество) не добавляются.
+procedure TGatewayThread.EnqueueRefresh(AUnit, AFunc: Byte; AAddr, AQty: Word;
+  const APdu: TBytes);
+var
+  I: Integer;
+begin
+  for I := 0 to High(FRefreshQueue) do
+    if (FRefreshQueue[I].UnitId = AUnit) and (FRefreshQueue[I].Func = AFunc) and
+       (FRefreshQueue[I].Addr = AAddr) and (FRefreshQueue[I].Qty = AQty) then
+      Exit; // уже в очереди
+  if Length(FRefreshQueue) >= MAX_REFRESH_QUEUE then
+    Exit;
+  SetLength(FRefreshQueue, Length(FRefreshQueue) + 1);
+  with FRefreshQueue[High(FRefreshQueue)] do
+  begin
+    UnitId := AUnit;
+    Func := AFunc;
+    Addr := AAddr;
+    Qty := AQty;
+    Pdu := APdu;
+  end;
+end;
+
+// Фоновое выполнение очереди обновлений кэша — только когда линия RTU
+// свободна. Выполняется по одному запросу, не прерывая текущий TCP-обмен;
+// пришедший RTU-трафик приоритетнее (проверка входного буфера порта).
+procedure TGatewayThread.ProcessRefreshQueue;
+var
+  Item: TRefreshItem;
+  RespPdu: TBytes;
+  ErrCode: Byte;
+  Desc: string;
+  Valid: Boolean;
+begin
+  while (Length(FRefreshQueue) > 0) and not Terminated do
+  begin
+    if FSerial.InputCount > 0 then
+      Exit; // RTU-запрос мастера приоритетнее фонового обновления
+    Item := FRefreshQueue[0];
+    if Length(FRefreshQueue) > 1 then
+      Move(FRefreshQueue[1], FRefreshQueue[0],
+        (Length(FRefreshQueue) - 1) * SizeOf(TRefreshItem));
+    SetLength(FRefreshQueue, Length(FRefreshQueue) - 1);
+
+    if TcpExchange(Item.Pdu, Item.UnitId, RespPdu, ErrCode) then
+    begin
+      // Кэшируем только корректный ответ (не исключение, длина сошлась)
+      if (Length(RespPdu) >= 2) and (RespPdu[0] = Item.Func) and
+         (RespPdu[1] = Length(RespPdu) - 2) then
+      begin
+        CacheStore(Item.UnitId, Item.Func, Item.Addr, Item.Qty,
+          Copy(RespPdu, 2, RespPdu[1]));
+        Desc := DescribePdu(RespPdu, True, Valid);
+        Log('КЭШ: обновлён: ' + Desc);
+      end
+      else
+        Log('КЭШ: ответ устройства не распознан, запись не обновлена');
+    end
+    else
+    begin
+      Inc(FErrors);
+      Log('ОШИБКА: КЭШ: обновление не удалось, запись оставлена');
+    end;
+  end;
 end;
 
 // PDU RTU -> транзакция Modbus TCP (MBAP + PDU) -> PDU ответа

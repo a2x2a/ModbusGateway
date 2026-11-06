@@ -28,6 +28,9 @@ type
     edPort: TEdit;
     lbTimeout: TLabel;
     edTimeout: TEdit;
+    chkCache: TCheckBox;
+    lbCacheTtl: TLabel;
+    edCacheTtl: TEdit;
     lbHint: TLabel;
     btnStart: TButton;
     shpStatus: TShape;
@@ -82,6 +85,9 @@ begin
   RefreshPorts;
   LoadSettings;
   tmrUiTimer(nil);
+  // Параметр командной строки /autostart — запустить шлюз сразу после старта
+  if FindCmdLineSwitch('autostart', True) then
+    btnStartClick(nil);
 end;
 
 procedure TfmMain.FormClose(Sender: TObject; var Action: TCloseAction);
@@ -138,7 +144,7 @@ end;
 procedure TfmMain.btnStartClick(Sender: TObject);
 var
   Cfg: TGatewayConfig;
-  Baud, TcpPort, Timeout: Integer;
+  Baud, TcpPort, Timeout, CacheTtl: Integer;
 begin
 
   if FThread <> nil then
@@ -177,6 +183,18 @@ begin
       'Параметры', MB_ICONWARNING);
     Exit;
   end;
+  if chkCache.Checked then
+  begin
+    CacheTtl := StrToIntDef(Trim(edCacheTtl.Text), -1);
+    if (CacheTtl < 0) or (CacheTtl > 60000) then
+    begin
+      MessageBox(Handle, 'TTL кэша должен быть от 0 до 60000 мс.',
+        'Параметры', MB_ICONWARNING);
+      Exit;
+    end;
+  end
+  else
+    CacheTtl := 0;
 
   Cfg.Port := cbPort.Text;
   Cfg.Baud := Baud;
@@ -189,6 +207,8 @@ begin
   Cfg.Host := Trim(edHost.Text);
   Cfg.TcpPort := Word(TcpPort);
   Cfg.ResponseTimeoutMs := Timeout;
+  Cfg.CacheEnabled := chkCache.Checked;
+  Cfg.CacheTtlMs := CacheTtl;
 
   FState := gsRunning;
   FStateMsg := 'Запуск…';
@@ -244,17 +264,33 @@ begin
 end;
 
 procedure TfmMain.AppendLog(const AText: string);
+var
+  Line: string;
+  W: TStreamWriter;
 begin
+  Line := FormatDateTime('hh:nn:ss.zzz', Now) + '  ' + AText;
   memLog.Lines.BeginUpdate;
   try
     while memLog.Lines.Count >= MAX_LOG_LINES do
       memLog.Lines.Delete(0);
-    memLog.Lines.Add(FormatDateTime('hh:nn:ss.zzz', Now) + '  ' + AText);
+    memLog.Lines.Add(Line);
   finally
     memLog.Lines.EndUpdate;
   end;
   memLog.SelStart := Length(memLog.Text);
   memLog.Perform(EM_SCROLLCARET, 0, 0);
+  // Дублируем строку в файл журнала рядом с программой (UTF-8)
+  try
+    W := TStreamWriter.Create(ChangeFileExt(ParamStr(0), '.log'), True,
+      TEncoding.UTF8);
+    try
+      W.WriteLine(Line);
+    finally
+      W.Free;
+    end;
+  except
+    // файл журнала недоступен — работаем дальше без него
+  end;
 end;
 
 procedure TfmMain.btnClearLogClick(Sender: TObject);
@@ -285,8 +321,8 @@ begin
   end;
   lbStatus.Caption := FStateMsg;
   if FThread <> nil then
-    lbStats.Caption := Format('Запросов: %d   Ответов: %d   Ошибок: %d',
-      [FThread.Requests, FThread.Responses, FThread.Errors])
+    lbStats.Caption := Format('Запросов: %d   Ответов: %d   Ошибок: %d   Кэш: %d',
+      [FThread.Requests, FThread.Responses, FThread.Errors, FThread.CacheHits])
   else
     lbStats.Caption := '';
 
@@ -322,6 +358,8 @@ begin
     edHost.Text := Ini.ReadString('Gateway', 'Host', '192.168.0.10');
     edPort.Text := Ini.ReadString('Gateway', 'TcpPort', '502');
     edTimeout.Text := Ini.ReadString('Gateway', 'Timeout', '1000');
+    chkCache.Checked := Ini.ReadBool('Gateway', 'CacheEnabled', False);
+    edCacheTtl.Text := Ini.ReadString('Gateway', 'CacheTtl', '10000');
     chkLog.Checked := Ini.ReadBool('Gateway', 'LogEnabled', True);
   finally
     Ini.Free;
@@ -343,6 +381,8 @@ begin
       Ini.WriteString('Gateway', 'Host', edHost.Text);
       Ini.WriteString('Gateway', 'TcpPort', edPort.Text);
       Ini.WriteString('Gateway', 'Timeout', edTimeout.Text);
+      Ini.WriteBool('Gateway', 'CacheEnabled', chkCache.Checked);
+      Ini.WriteString('Gateway', 'CacheTtl', edCacheTtl.Text);
       Ini.WriteBool('Gateway', 'LogEnabled', chkLog.Checked);
     finally
       Ini.Free;

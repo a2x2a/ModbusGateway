@@ -21,3 +21,6 @@ ModbusGateway.ini
 *.~*
 *.local
 Thumbs.db
+
+# Журналы
+*.log

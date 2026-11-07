@@ -522,8 +522,10 @@ procedure TGatewayThread.CacheInvalidate(AUnit: Byte; AAddr, AQty: Word);
       if ((AUnit = 0) or (AArr[I].UnitId = AUnit)) and
          (AArr[I].Addr < AAddr + AQty) and (AAddr < AArr[I].Addr + AArr[I].Qty) then
       begin
-        if I < High(AArr) then
-          Move(AArr[I + 1], AArr[I], (High(AArr) - I) * SizeOf(TCacheEntry));
+        // сдвиг присваиванием: в записях управляемые поля (TBytes),
+        // Move по ним ломает подсчёт ссылок
+        for var J := I + 1 to High(AArr) do
+          AArr[J - 1] := AArr[J];
         SetLength(AArr, Length(AArr) - 1);
         // без Inc(I): на место I сдвинулась следующая запись
       end
@@ -576,9 +578,9 @@ begin
     if FSerial.InputCount > 0 then
       Exit; // RTU-запрос мастера приоритетнее фонового обновления
     Item := FRefreshQueue[0];
-    if Length(FRefreshQueue) > 1 then
-      Move(FRefreshQueue[1], FRefreshQueue[0],
-        (Length(FRefreshQueue) - 1) * SizeOf(TRefreshItem));
+    // сдвиг присваиванием: в записи есть TBytes, Move ломает подсчёт ссылок
+    for var J := 1 to High(FRefreshQueue) do
+      FRefreshQueue[J - 1] := FRefreshQueue[J];
     SetLength(FRefreshQueue, Length(FRefreshQueue) - 1);
 
     if TcpExchange(Item.Pdu, Item.UnitId, RespPdu, ErrCode) then
@@ -765,9 +767,9 @@ begin
     if (FFailCache[I].UnitId = AUnit) and (FFailCache[I].Func = AFunc) and
        (FFailCache[I].Addr = AAddr) and (FFailCache[I].Qty = AQty) then
     begin
-      if I < High(FFailCache) then
-        Move(FFailCache[I + 1], FFailCache[I],
-          (High(FFailCache) - I) * SizeOf(TCacheEntry));
+      // сдвиг присваиванием: в записи есть TBytes, Move ломает подсчёт ссылок
+      for var J := I + 1 to High(FFailCache) do
+        FFailCache[J - 1] := FFailCache[J];
       SetLength(FFailCache, Length(FFailCache) - 1);
       Exit;
     end;

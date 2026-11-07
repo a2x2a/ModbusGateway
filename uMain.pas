@@ -29,9 +29,6 @@ type
     lbTimeout: TLabel;
     edTimeout: TEdit;
     chkCache: TCheckBox;
-    lbCacheTtl: TLabel;
-    edCacheTtl: TEdit;
-    lbHint: TLabel;
     btnStart: TButton;
     shpStatus: TShape;
     lbStatus: TLabel;
@@ -144,7 +141,7 @@ end;
 procedure TfmMain.btnStartClick(Sender: TObject);
 var
   Cfg: TGatewayConfig;
-  Baud, TcpPort, Timeout, CacheTtl: Integer;
+  Baud, TcpPort, Timeout: Integer;
 begin
 
   if FThread <> nil then
@@ -183,19 +180,6 @@ begin
       'Параметры', MB_ICONWARNING);
     Exit;
   end;
-  if chkCache.Checked then
-  begin
-    CacheTtl := StrToIntDef(Trim(edCacheTtl.Text), -1);
-    if (CacheTtl < 0) or (CacheTtl > 60000) then
-    begin
-      MessageBox(Handle, 'TTL кэша должен быть от 0 до 60000 мс.',
-        'Параметры', MB_ICONWARNING);
-      Exit;
-    end;
-  end
-  else
-    CacheTtl := 0;
-
   Cfg.Port := cbPort.Text;
   Cfg.Baud := Baud;
   Cfg.Parity := TSerialParity(cbParity.ItemIndex);
@@ -208,7 +192,7 @@ begin
   Cfg.TcpPort := Word(TcpPort);
   Cfg.ResponseTimeoutMs := Timeout;
   Cfg.CacheEnabled := chkCache.Checked;
-  Cfg.CacheTtlMs := CacheTtl;
+  Cfg.CacheTtlMs := 10000; // TTL кэша фиксированный — 10 с
 
   FState := gsRunning;
   FStateMsg := 'Запуск…';
@@ -359,7 +343,6 @@ begin
     edPort.Text := Ini.ReadString('Gateway', 'TcpPort', '502');
     edTimeout.Text := Ini.ReadString('Gateway', 'Timeout', '1000');
     chkCache.Checked := Ini.ReadBool('Gateway', 'CacheEnabled', False);
-    edCacheTtl.Text := Ini.ReadString('Gateway', 'CacheTtl', '10000');
     chkLog.Checked := Ini.ReadBool('Gateway', 'LogEnabled', True);
   finally
     Ini.Free;
@@ -382,7 +365,6 @@ begin
       Ini.WriteString('Gateway', 'TcpPort', edPort.Text);
       Ini.WriteString('Gateway', 'Timeout', edTimeout.Text);
       Ini.WriteBool('Gateway', 'CacheEnabled', chkCache.Checked);
-      Ini.WriteString('Gateway', 'CacheTtl', edCacheTtl.Text);
       Ini.WriteBool('Gateway', 'LogEnabled', chkLog.Checked);
     finally
       Ini.Free;

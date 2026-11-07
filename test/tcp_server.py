@@ -20,6 +20,8 @@ def handle(pdu):
     func = pdu[0]
     if func in (3, 4):
         addr, qty = struct.unpack('>HH', pdu[1:5])
+        if addr < 298 and addr + qty > 296:
+            return None  # «молчащие» регистры 296-297: имитация бага устройства
         counter += 1
         vals = [(counter, addr + i)[i > 0] for i in range(qty)]
         data = b''.join(struct.pack('>H', v & 0xFFFF) for v in vals)
@@ -50,6 +52,10 @@ while True:
                 frame, buf = buf[:6 + ln], buf[6 + ln:]
                 unit, pdu = frame[6], frame[7:6 + ln]
                 resp = handle(pdu)
+                if resp is None:
+                    log('запрос tid=%d f%02d @%d -> МОЛЧИТ' % (tid, pdu[0],
+                        struct.unpack('>H', pdu[1:3])[0]))
+                    continue
                 time.sleep(0.3)  # имитация задержки устройства: кэш-ответ заметно быстрее
                 log('запрос tid=%d f%02d @%d -> %d байт' % (tid, pdu[0],
                     struct.unpack('>H', pdu[1:3])[0] if len(pdu) >= 3 else 0, len(resp)))

@@ -1,4 +1,4 @@
-﻿object fmMain: TfmMain
+object fmMain: TfmMain
   Left = 0
   Top = 0
   Caption = #1064#1083#1102#1079' Modbus RTU <-> TCP'
@@ -20,8 +20,8 @@
     560)
   TextHeight = 15
   object shpStatus: TShape
-    Left = 164
-    Top = 212
+    Left = 172
+    Top = 154
     Width = 17
     Height = 17
     Brush.Color = clSilver
@@ -29,9 +29,9 @@
     Shape = stCircle
   end
   object lbStatus: TLabel
-    Left = 188
-    Top = 212
-    Width = 160
+    Left = 206
+    Top = 154
+    Width = 130
     Height = 17
     AutoSize = False
     Caption = #1054#1089#1090#1072#1085#1086#1074#1083#1077#1085
@@ -44,7 +44,7 @@
   end
   object lbStats: TLabel
     Left = 360
-    Top = 212
+    Top = 154
     Width = 352
     Height = 17
     Alignment = taRightJustify
@@ -61,7 +61,7 @@
     Left = 8
     Top = 8
     Width = 344
-    Height = 186
+    Height = 130
     Caption = #1055#1086#1088#1090' Modbus RTU ('#1079#1072#1087#1088#1086#1089#1099' '#1084#1072#1089#1090#1077#1088#1072')'
     TabOrder = 0
     object lbPort: TLabel
@@ -183,7 +183,7 @@
     Left = 360
     Top = 8
     Width = 352
-    Height = 186
+    Height = 130
     Anchors = [akLeft, akTop, akRight]
     Caption = #1059#1089#1090#1088#1086#1081#1089#1090#1074#1086' Modbus TCP ('#1089#1077#1088#1074#1077#1088')'
     TabOrder = 1
@@ -195,83 +195,55 @@
       Caption = 'IP-'#1072#1076#1088#1077#1089
     end
     object lbTcpPort: TLabel
-      Left = 16
-      Top = 66
+      Left = 216
+      Top = 34
       Width = 28
       Height = 15
       Caption = #1055#1086#1088#1090
     end
     object lbTimeout: TLabel
       Left = 16
-      Top = 98
+      Top = 66
       Width = 110
       Height = 15
       Caption = #1058#1072#1081#1084'-'#1072#1091#1090' '#1086#1090#1074#1077#1090#1072', '#1084#1089
     end
-    object lbCacheTtl: TLabel
-      Left = 140
-      Top = 130
-      Width = 36
-      Height = 15
-      Caption = 'TTL, '#1084#1089
-    end
-    object lbHint: TLabel
-      Left = 16
-      Top = 160
-      Width = 313
-      Height = 13
-      Caption = #1055#1088#1080' '#1086#1096#1080#1073#1082#1077' '#1089#1074#1103#1079#1080' '#1084#1072#1089#1090#1077#1088#1091' RTU '#1074#1086#1079#1074#1088#1072#1097#1072#1077#1090#1089#1103' '#1080#1089#1082#1083#1102#1095#1077#1085#1080#1077
-      Font.Charset = DEFAULT_CHARSET
-      Font.Color = clGrayText
-      Font.Height = -11
-      Font.Name = 'Segoe UI'
-      Font.Style = []
-      ParentFont = False
-    end
     object edHost: TEdit
-      Left = 76
+      Left = 70
       Top = 30
-      Width = 150
+      Width = 136
       Height = 23
       TabOrder = 0
       Text = '192.168.0.10'
     end
     object edPort: TEdit
-      Left = 76
-      Top = 62
-      Width = 70
+      Left = 250
+      Top = 30
+      Width = 60
       Height = 23
       TabOrder = 1
       Text = '502'
     end
     object edTimeout: TEdit
-      Left = 140
-      Top = 94
-      Width = 70
+      Left = 250
+      Top = 62
+      Width = 60
       Height = 23
       TabOrder = 2
       Text = '1000'
     end
     object chkCache: TCheckBox
       Left = 16
-      Top = 128
-      Width = 118
+      Top = 97
+      Width = 209
       Height = 17
       Caption = #1050#1101#1096' '#1095#1090#1077#1085#1080#1103' f03/f04'
       TabOrder = 3
     end
-    object edCacheTtl: TEdit
-      Left = 190
-      Top = 126
-      Width = 60
-      Height = 23
-      TabOrder = 4
-      Text = '10000'
-    end
   end
   object btnStart: TButton
-    Left = 8
-    Top = 204
+    Left = 16
+    Top = 146
     Width = 140
     Height = 32
     Caption = #1057#1090#1072#1088#1090
@@ -287,20 +259,20 @@
   end
   object gbLog: TGroupBox
     Left = 8
-    Top = 244
+    Top = 186
     Width = 704
-    Height = 308
+    Height = 366
     Anchors = [akLeft, akTop, akRight, akBottom]
     Caption = #1046#1091#1088#1085#1072#1083' '#1086#1073#1084#1077#1085#1072
     TabOrder = 3
     DesignSize = (
       704
-      308)
+      366)
     object memLog: TMemo
       Left = 8
       Top = 20
       Width = 688
-      Height = 240
+      Height = 298
       Anchors = [akLeft, akTop, akRight, akBottom]
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clWindowText
@@ -314,8 +286,8 @@
       WordWrap = False
     end
     object chkLog: TCheckBox
-      Left = 8
-      Top = 272
+      Left = 16
+      Top = 334
       Width = 200
       Height = 17
       Anchors = [akLeft, akBottom]
@@ -325,8 +297,8 @@
       TabOrder = 1
     end
     object btnClearLog: TButton
-      Left = 480
-      Top = 268
+      Left = 486
+      Top = 329
       Width = 100
       Height = 27
       Anchors = [akRight, akBottom]
@@ -336,7 +308,7 @@
     end
     object btnSaveLog: TButton
       Left = 592
-      Top = 268
+      Top = 329
       Width = 104
       Height = 27
       Anchors = [akRight, akBottom]
@@ -350,13 +322,13 @@
     FileName = 'gateway.log'
     Filter = #1046#1091#1088#1085#1072#1083' (*.log)|*.log|'#1042#1089#1077' '#1092#1072#1081#1083#1099' (*.*)|*.*'
     Options = [ofOverwritePrompt, ofEnableSizing]
-    Left = 656
-    Top = 168
+    Left = 600
+    Top = 248
   end
   object tmrUi: TTimer
     Interval = 300
     OnTimer = tmrUiTimer
-    Left = 616
-    Top = 168
+    Left = 552
+    Top = 240
   end
 end
